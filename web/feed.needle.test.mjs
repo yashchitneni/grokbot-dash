@@ -74,3 +74,19 @@ test('needle links allow only the agent chat and the dashboard host', () => {
   assert.equal(safeNeedleFooterUrl('https://yash-bot-dashboard.pages.dev.evil.com'), null);
   assert.equal(safeNeedleFooterUrl('https://user:pass@yash-bot-dashboard.pages.dev/'), null);
 });
+
+test('needle detail fields are bounded and source links require https', () => {
+  const item = normalizeNeedle({ type: 'needle', items: [{
+    detail: 'd'.repeat(1300), question: 'q'.repeat(500), source_at: '2026-11-03',
+    source_url: 'https://app.notion.com/p/example', stale: true, stale_reason: 'Expired',
+  }, { source_url: 'javascript:alert(1)', stale: 'true' }, { source_url: 'http://example.com' }] }).items;
+  assert.equal(item[0].detail.length, 1200);
+  assert.equal(item[0].question.length, 400);
+  assert.equal(item[0].source_at, '2026-11-03');
+  assert.equal(item[0].source_url, 'https://app.notion.com/p/example');
+  assert.equal(item[0].stale, true);
+  assert.equal(item[0].stale_reason, 'Expired');
+  assert.equal(item[1].source_url, null);
+  assert.equal(item[1].stale, false);
+  assert.equal(item[2].source_url, null);
+});

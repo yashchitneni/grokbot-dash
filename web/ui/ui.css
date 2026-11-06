@@ -818,3 +818,15 @@ html.bhq-phone body { overscroll-behavior: none; -webkit-tap-highlight-color: tr
 @media (prefers-reduced-transparency: reduce) {
   .bhq-phone .bhq-sheet { -webkit-backdrop-filter: none; backdrop-filter: none; background: #1A1A1E; }
 }
+
+.bhq-wrow.is-needle { cursor: pointer; }
+.bhq-wrow.is-needle.is-open .bhq-wtext {
+  display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible;
+}
+.bhq-ndetail { margin-top: 8px; color: #C8C8CE; font: 500 13px/1.5 var(--bhq-round); overflow-wrap: anywhere; }
+.bhq-ndetail[hidden] { display: none; }
+.bhq-ndetail p { margin: 6px 0; }
+.bhq-ndetail a { color: #C2E784; text-decoration: underline; }
+.bhq-nbadge.is-stale { color: #FFD28E; border-color: #997641; }
+.bhq-nbadge[hidden] { display: none; }
+.bhq-wrow.is-needle:focus-visible { outline: 2px solid #C2E784; outline-offset: 2px; }

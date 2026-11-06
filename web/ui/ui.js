@@ -24,7 +24,7 @@
  * back when the window grows. ?sheet=open starts with the sheet expanded (for screenshots).
  */
 
-import { needleCommand, needleSig } from '../feed.js';
+import { needleCommand, needleSig, safeNeedleSourceUrl } from '../feed.js';
 import { safeNeedleChatUrl, safeNeedleFooterUrl } from '../lib/state.js';
 
 // Resolved against this file, so it works from /web/index.html, from a server rooted at web/, and from the harness.
@@ -1562,18 +1562,37 @@ function makeWaitRow(id) {
 function makeNeedleRow(key) {
   const badge = h('span', { class: 'bhq-nbadge', text: 'decide-later' });
   const name = h('span', { class: 'bhq-wname' });
-  const btn = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Open chat', hidden: true, title: 'Open this bot’s chat' });
-  const approve = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Approve', title: 'Copy “approve needle …” and open the chat' });
-  const skip = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Skip', title: 'Copy “skip needle …” and hide until the next needle post' });
+  const btn = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Open bot chat', hidden: true, title: 'opens this bot’s chat - does not jump to the source ask' });
+  const approve = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Copy approval + open bot chat', title: 'Copy “approve needle …” and open the chat' });
+  const skip = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Skip (hide here)', title: 'Copy “skip needle …” and hide until the next needle post' });
   const note = h('span', { class: 'bhq-nnote' });
   const step = h('span');
   const text = h('p', { class: 'bhq-wtext' }, step);
+  const detail = h('p', { class: 'bhq-wtext' });
+  const question = h('p');
+  const sourceDate = h('p');
+  const source = h('a', { target: '_blank', rel: 'noopener', text: 'Source' });
+  const stale = h('span', { class: 'bhq-nbadge is-stale', text: 'Stale', hidden: true });
+  const staleReason = h('p');
+  const expanded = h('div', { class: 'bhq-ndetail', hidden: true }, detail, question, sourceDate, source, staleReason);
   const row = h('div', { class: 'bhq-wrow is-needle', 'data-id': key },
     h('div', { class: 'bhq-wmain' },
-      h('div', { class: 'bhq-wtop' }, badge, name),
-      text,
+      h('div', { class: 'bhq-wtop' }, badge, name, stale),
+      text, expanded,
       h('div', { class: 'bhq-nacts' }, btn, approve, skip, note)));
-  const ref = { row, name, btn, step, note, key, itemId: '', itemTitle: '', chat: null, copyT: 0 };
+  const ref = { row, name, btn, step, note, key, itemId: '', itemTitle: '', chat: null, copyT: 0, detail, question, sourceDate, source, stale, staleReason };
+  const toggle = () => {
+    const open = row.classList.toggle('is-open');
+    expanded.hidden = !open;
+    row.setAttribute('aria-expanded', String(open));
+  };
+  row.tabIndex = 0;
+  row.setAttribute('aria-expanded', 'false');
+  row.addEventListener('click', e => { if (!e.target.closest('button, a')) toggle(); });
+  row.addEventListener('keydown', e => {
+    if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); }
+  });
+  for (const action of [btn, approve, skip, source]) action.addEventListener('click', e => e.stopPropagation());
   btn.addEventListener('click', () => {
     const url = safeNeedleChatUrl(ref.chat);
     if (url) openChat(ref.key, url);
@@ -1587,7 +1606,7 @@ async function approveNeedle(r) {
   const cmd = needleCommand('approve', { id: r.itemId, title: r.itemTitle });
   if (cmd) {
     const ok = await copyText(cmd);
-    setText(r.note, ok ? 'Copied — paste it in the chat' : 'Could not copy — send: ' + cmd);
+    setText(r.note, ok ? 'Copied - paste it in the chat' : 'Could not copy - send: ' + cmd);
     r.row.classList.add('is-copied');
     clearTimeout(r.copyT);
     r.copyT = setTimeout(() => r.row.classList.remove('is-copied'), 4200);
@@ -1600,7 +1619,7 @@ async function skipNeedle(r) {
   const cmd = needleCommand('skip', { id: r.itemId, title: r.itemTitle });
   const ok = cmd ? await copyText(cmd) : false;
   if (!ok) {
-    setText(r.note, cmd ? 'Could not copy — send: ' + cmd : 'No id to skip');
+    setText(r.note, cmd ? 'Could not copy - send: ' + cmd : 'No id to skip');
     r.row.classList.add('is-copied');
     return;
   }
@@ -1641,6 +1660,16 @@ function renderNeedle(state) {
     setAttr(r.row, 'data-id', key);
     setText(r.name, clipText(item.bot, 80) || 'Bot');
     const line = needleLine(item);
+    setText(r.detail, clipText(item.detail || item.need, 1200));
+    setText(r.question, item.question ? 'Decision: ' + clipText(item.question, 400) : '');
+    setHidden(r.question, !item.question);
+    setText(r.sourceDate, item.source_at ? 'Source date: ' + clipText(item.source_at, 80) : '');
+    setHidden(r.sourceDate, !item.source_at);
+    const sourceUrl = safeNeedleSourceUrl(item.source_url);
+    setAttr(r.source, 'href', sourceUrl);
+    setHidden(r.source, !sourceUrl);
+    setHidden(r.stale, item.stale !== true);
+    setText(r.staleReason, item.stale === true ? clipText(item.stale_reason, 400) : '');
     setText(r.step, line);
     setAttr(r.step, 'title', line || null);
     const chat = safeNeedleChatUrl(item.chat_url);
@@ -1763,7 +1792,7 @@ async function turnOffRoutine(r, ref) {
   const d = U.dock;
   const cmd = 'pause routine ' + r.routine;
   const ok = await copyText(cmd);
-  setText(ref.noteText, ok ? 'Copied — paste it in the chat' : 'Could not copy — send: ' + cmd);
+  setText(ref.noteText, ok ? 'Copied - paste it in the chat' : 'Could not copy - send: ' + cmd);
   const key = ref.key;
   clearTimeout(d.copied.get(key));
   ref.li.classList.add('is-copied');
@@ -1807,7 +1836,7 @@ function renderRoutines(state) {
             h('span', { class: 'bhq-rnote', role: 'status' }, svg(ICON.check), noteText),
             btn)));
       const ref = { li, next, noteText, key, t: parseTs(r.next_run) };
-      setText(noteText, 'Copied — paste it in the chat');
+      setText(noteText, 'Copied - paste it in the chat');
       btn.addEventListener('click', () => turnOffRoutine(r, ref));
       d.rl.append(li);
       return ref;

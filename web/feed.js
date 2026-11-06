@@ -169,10 +169,26 @@ function isMap(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 export function normalizeNeedle(rec) {
   if (!rec || rec.type !== 'needle' || !Array.isArray(rec.items)) return null;
   return {
-    items: rec.items.slice(0, 5),
+    items: rec.items.slice(0, 5).filter(it => it && typeof it === 'object' && !Array.isArray(it)).map(it => ({
+      ...it,
+      detail: needleField(it.detail, 1200),
+      question: needleField(it.question, 400),
+      source_at: needleField(it.source_at, 80),
+      source_url: safeNeedleSourceUrl(it.source_url),
+      stale: it.stale === true,
+      stale_reason: needleField(it.stale_reason, 400),
+    })),
     footer: rec.footer || null,
     updated_at: rec.updated_at || null,
   };
+}
+
+export function safeNeedleSourceUrl(value) {
+  if (typeof value !== 'string' || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
 }
 
 function needleField(v, n) {

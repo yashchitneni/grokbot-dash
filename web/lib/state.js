@@ -105,6 +105,35 @@ export function safeChatUrl(raw) {
   return null;
 }
 
+const NEEDLE_CHAT_ID = /^[A-Za-z0-9-]{1,80}$/;
+const NEEDLE_FOOTER_HOSTS = new Set(['yash-bot-dashboard.pages.dev']);
+
+function parseSafeUrl(raw) {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s || /[\u0000-\u001f\u007f\s]/.test(s)) return null;
+  try { return new URL(s); } catch { return null; }
+}
+
+/** Needle "Open chat": only grokbot://app/v1/agent?id=<id>. Anything else is dropped. */
+export function safeNeedleChatUrl(raw) {
+  const u = parseSafeUrl(raw);
+  if (!u) return null;
+  if (u.protocol !== 'grokbot:' || u.hostname !== 'app' || u.pathname !== '/v1/agent') return null;
+  if (u.username || u.password || u.port || u.hash) return null;
+  const id = u.searchParams.get('id');
+  if (!id || !NEEDLE_CHAT_ID.test(id) || u.search !== `?id=${id}`) return null;
+  return u.href;
+}
+
+/** Needle footer link: https only, and only the bot-dashboard host. */
+export function safeNeedleFooterUrl(raw) {
+  const u = parseSafeUrl(raw);
+  if (!u || u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+  if (!NEEDLE_FOOTER_HOSTS.has(u.hostname)) return null;
+  return u.href;
+}
+
 function normBotsCfg(obj) {
   const map = new Map();
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return map;

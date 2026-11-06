@@ -452,7 +452,7 @@
 
 /* waiting on me: one tinted tile per bot (amber = waiting, red = error); the eye blurs them for the camera */
 .bhq-wlist { display: flex; flex-direction: column; gap: 6px; transition: filter .35s var(--bhq-ease), opacity .35s; }
-.bhq-dcard.is-blurred .bhq-wlist { filter: blur(9px); opacity: .85; user-select: none; pointer-events: none; }
+.bhq-dcard.is-blurred :is(.bhq-wlist, .bhq-nlist, .bhq-nfoot) { filter: blur(9px); opacity: .85; user-select: none; pointer-events: none; }
 .bhq-wrow {
   --base: #51412B; display: flex; align-items: flex-start; gap: 11px; padding: 10px 12px 10px 10px; border-radius: 18px;
   background: linear-gradient(90deg, rgba(255, 178, 58, .3), rgba(255, 178, 58, .11));
@@ -477,6 +477,28 @@
 }
 .bhq-wbtn:hover, .bhq-roff:hover { background: rgba(255, 255, 255, .26); }
 .bhq-wbtn:active, .bhq-roff:active { transform: scale(.94); }
+
+/* needle strip: decide-later backlog, muted so it does not look like a tap-now card */
+.bhq-nlist { display: flex; flex-direction: column; gap: 6px; }
+.bhq-wlist:not(:empty) + .bhq-nlist:not(:empty) { margin-top: 6px; }
+.bhq-wrow.is-needle {
+  --base: #2C2C30;
+  background: rgba(255, 255, 255, .045);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .16);
+}
+.bhq-wrow.is-needle .bhq-wtop { justify-content: flex-start; }
+.bhq-wrow.is-needle .bhq-wname { flex: 1 1 auto; min-width: 0; }
+.bhq-wrow.is-needle .bhq-wtext { color: #B4B4BA; }
+.bhq-nacts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.bhq-nnote { display: none; flex: 1 1 100%; color: #C2E784; font: 800 12px/1.3 var(--bhq-round); }
+.bhq-wrow.is-needle.is-copied .bhq-nnote { display: block; }
+.bhq-nbadge {
+  flex: none; height: 18px; padding: 0 7px; border-radius: 9px; display: inline-flex; align-items: center;
+  border: 1px solid rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .06); color: #C8C8CE;
+  font: 800 10px/1 var(--bhq-round); letter-spacing: .02em;
+}
+.bhq-nfoot { margin: 8px 6px 2px; }
+.bhq-nfoot a { color: #C8C8CE; font: 800 12px/1.35 var(--bhq-round); text-decoration: underline; text-underline-offset: 2px; }
 
 /* finished: a timeline, the avatars sit on its rail */
 .bhq-tl { position: relative; display: flex; flex-direction: column; }

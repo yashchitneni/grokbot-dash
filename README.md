@@ -31,9 +31,11 @@ One JSON object per POST, at most 4 KB.
 {"type":"usage","total_used_pct":37,"resets_at":"2026-11-01T18:00:00+02:00","bots":{"X Writer":4.1}}
 {"chat":{"X Writer":"grokbot://app/v1/agent?id=<bot id>"}}
 {"routines":{"bot":"X Writer","items":[{"name":"Morning thread","schedule":"daily 09:00","next_run":"2026-11-02T09:00:00+02:00"}]}}
+{"type":"needle","updated_at":"2026-11-06T17:31:15Z","footer":{"label":"Full list: bot dashboard","url":"https://yash-bot-dashboard.pages.dev"},"items":[{"id":"…","kind":"bbb","label":"decide-later","bot":"BBB Bot","title":"…","need":"…","date":"2026-11-05","chat_url":"grokbot://app/v1/agent?id=…"}]}
 ```
 
 - **status**, posted on every status change of any bot. `bot` is the exact name, `status` is one of `working`, `idle`, `waiting_user`, `error`, `done`, `step` is what the bot does, at most 80 characters. `group` (optional) is the bot's team: each team gets its own floor of the office.
+- **needle**: at most 5 filtered backlog items (`kind` is `bbb` or `content`, label `decide-later`) for the Waiting on me strip, under any live tap-now cards, including when those cards are empty. Each next message replaces the whole strip. It never creates a bot. Open chat opens the owning bot. Approve copies `approve needle <id>: <title>` and opens that chat. Skip copies `skip needle <id>: <title>` and hides the row until the next needle post. Optional `footer` links to the full list.
 - **roster**: the exact names of all your bots, so quiet bots show up too. Re-posted every morning.
 - **looks**: one look per bot. `shape` is one of `sphere`, `rounded_cube`, `pill`, `triangle`, `cone`, `pentagon`, `hexagon`, `star4`, `star6`, `clover`, `rounded_square`, `trio`. `accessory` is one of `none`, `glasses`, `stem`, `antenna`, `bow`. `color` is `#RRGGBB`. Details in `docs/AVATARS.md`. Re-posted every morning.
 - **usage**: total used in percent, when it resets, and per bot. Fields the bot does not know are left out. Posted every 2 hours.

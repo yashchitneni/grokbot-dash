@@ -13,8 +13,10 @@
 //   {"groups":{"Bot A":"Content"}}                                            teams, one floor each
 //   {"chat":{"Bot A":"grokbot://app/v1/agent?id=…"}}                         each bot's chat, for «Open chat»
 //   {"routines":{"bot":"Bot A","items":[{"name":"…","schedule":"…","next_run":"ISO"}]}}   a bot's routines
-// On top of the server's state the office gets state.finished (done lines of the last 24 h, newest first) and
-// state.routines (every bot's routines, soonest first), for the «Finished» and «Routines» panels.
+//   {"type":"needle","updated_at":"ISO","footer":{"label":"…","url":"https://…"},"items":[…]}  up to 5 decide-later asks
+// On top of the server's state the office gets state.finished (done lines of the last 24 h, newest first),
+// state.routines (every bot's routines, soonest first), and state.needle (the latest needle strip).
+// A needle line never becomes a bot.
 import { StateStore, botIdFor, safeChatUrl } from './lib/state.js';
 import { parseFeedHash, ntfyAuthUrl, DEFAULT_FEED_SERVER } from './lib/feed-url.js';
 
@@ -35,6 +37,7 @@ export async function connectFeed({ topic, server, auth }, onState) {
   const store = new StateStore({ tz, hasAvatar: (id) => HANDMADE.has(id) });   // others get a generated blob, no 404 probe
   const cfg = {};                                        // per bot name: { look, chat_url } -> the store's bots config
   const routines = new Map();                            // bot id -> { name, items }
+  let latestNeedle = null;                               // last {type:"needle"} record; the next one replaces it
   let lines = [], saveTimer = 0, lastId = null;
   const seen = new Set();
 
@@ -102,6 +105,12 @@ export async function connectFeed({ topic, server, auth }, onState) {
     let rec;
     try { rec = JSON.parse(message); } catch { return false; }
     if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return false;
+    // Needle is a filtered backlog strip, not a bot. Handle it before any bot-row ingestion.
+    if (rec.type === 'needle') {
+      if (!Array.isArray(rec.items)) return false;
+      latestNeedle = rec;
+      return true;
+    }
     const t = typeof rec.t === 'string' ? rec.t : new Date(time * 1000).toISOString();
     if (Array.isArray(rec.roster)) {
       for (const name of rec.roster.slice(0, 400)) {
@@ -146,6 +155,8 @@ export async function connectFeed({ topic, server, auth }, onState) {
     }
     s.finished = finished;
     s.routines = routineRows(routines);
+    const needle = normalizeNeedle(latestNeedle);
+    if (needle) s.needle = needle;
     return s;
   }
   function publish() { store.commit(); onState(extras(store.snapshot())); }
@@ -153,6 +164,38 @@ export async function connectFeed({ topic, server, auth }, onState) {
 }
 
 function isMap(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+/** The Waiting-panel strip from one needle record. Null unless type is needle and items is an array. */
+export function normalizeNeedle(rec) {
+  if (!rec || rec.type !== 'needle' || !Array.isArray(rec.items)) return null;
+  return {
+    items: rec.items.slice(0, 5),
+    footer: rec.footer || null,
+    updated_at: rec.updated_at || null,
+  };
+}
+
+function needleField(v, n) {
+  if (typeof v !== 'string') return '';
+  return v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, n);
+}
+
+/** Paste line for Approve / Skip. The office does not call any bot API. */
+export function needleCommand(verb, item) {
+  if (verb !== 'approve' && verb !== 'skip') return null;
+  const id = needleField(item && item.id, 80);
+  if (!id) return null;
+  const title = needleField(item && item.title, 240);
+  return title ? `${verb} needle ${id}: ${title}` : `${verb} needle ${id}`;
+}
+
+/** Changes when the next needle post replaces the strip, which clears local Skip hides. */
+export function needleSig(needle) {
+  if (!needle || typeof needle !== 'object') return '';
+  const items = Array.isArray(needle.items) ? needle.items.slice(0, 5) : [];
+  const ids = items.map((it) => (it && typeof it === 'object' ? needleField(it.id, 80) : '')).join('|');
+  return `${needle.updated_at || ''}|${ids}`;
+}
 
 /** One bot's latest list replaces that bot only. Other bots' messages stay. Items may have a schedule and no next_run. */
 export function applyRoutineMessage(routines, rec) {

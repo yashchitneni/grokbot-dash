@@ -9,7 +9,8 @@
  *   renderUI(state, { currentFloor, selectedBot })   // idempotent, cheap, safe to call every second
  *
  * State fields read: bots, floors, feed, usage, demo, now, summary, plus (bots-only mode, may be missing):
- *   bots[id].chat_url, state.finished [{ t, bot, name, step }], state.routines [{ bot, name, routine, schedule, next_run }].
+ *   bots[id].chat_url, state.finished [{ t, bot, name, step }], state.routines [{ bot, name, routine, schedule, next_run }],
+ *   state.needle { items, footer, updated_at } (filtered decide-later strip; never a live waiting_user row).
  *
  * Every DOM node is created once and then patched in place (text / attributes / classes only when the
  * value changed), so hover, focus and scroll positions survive the 1 Hz re-render.
@@ -22,6 +23,9 @@
  * of its own (swipe down or x to close). Landscape: the sheet is a side column. Desktop is untouched: the same nodes move
  * back when the window grows. ?sheet=open starts with the sheet expanded (for screenshots).
  */
+
+import { needleCommand, needleSig } from '../feed.js';
+import { safeNeedleChatUrl, safeNeedleFooterUrl } from '../lib/state.js';
 
 // Resolved against this file, so it works from /web/index.html, from a server rooted at web/, and from the harness.
 const THUMB_BASE = new URL('../../assets/blobs/thumbs/', import.meta.url).href;
@@ -728,6 +732,8 @@ function setWaitBlur(on, save = true) {
   setAttr(d.waiting.eye, 'aria-label', d.blurred ? 'Show this panel' : 'Hide this panel for the camera');
   setAttr(d.waiting.eye, 'title', d.blurred ? 'Show' : 'Hide for the camera');
   d.wlist.inert = d.blurred;
+  d.nlist.inert = d.blurred;
+  d.nfoot.inert = d.blurred;
   if (save) lsSet(LS_BLUR, d.blurred ? '1' : '0');
 }
 
@@ -738,8 +744,11 @@ function buildDock(floors, feed) {
   const routines = dockCard('routines', 'Routines');
 
   const wlist = h('div', { class: 'bhq-wlist' });
+  const nlist = h('div', { class: 'bhq-nlist' });
+  const nlink = h('a', { target: '_blank', rel: 'noopener noreferrer' });
+  const nfoot = h('p', { class: 'bhq-nfoot', hidden: true }, nlink);
   const wempty = h('p', { class: 'bhq-note', text: 'Nothing is waiting on you.', hidden: true });
-  waiting.inner.append(wlist, wempty);
+  waiting.inner.append(wlist, nlist, nfoot, wempty);
 
   const tl = h('ol', { class: 'bhq-tl', role: 'list' });
   const fempty = h('p', { class: 'bhq-note', text: 'Nothing finished in the last 24 hours.', hidden: true });
@@ -753,8 +762,8 @@ function buildDock(floors, feed) {
   document.body.append(root);
 
   U.dock = {
-    root, waiting, finished, routines, wlist, wempty, tl, fempty, rl, rempty,
-    lru: [], pinned: null, wrows: new Map(), finSig: null, finRefs: [], routSig: null, routRefs: [], copied: new Map(), blurred: false,
+    root, waiting, finished, routines, wlist, nlist, nfoot, nlink, wempty, tl, fempty, rl, rempty,
+    lru: [], pinned: null, wrows: new Map(), nrows: new Map(), needleSkip: null, finSig: null, finRefs: [], routSig: null, routRefs: [], copied: new Map(), blurred: false,
     floors, feed,
   };
 
@@ -1515,7 +1524,20 @@ function botFor(state, id, fallbackName) {
   return b || { id, name: fallbackName || id, avatar: id };
 }
 
-/* Waiting on me: every bot that is waiting for the user or in error, newest first. */
+/* Waiting on me: live waiting_user / error rows first (tap now), then the needle strip (decide later). */
+
+function clipText(v, n) {
+  if (typeof v !== 'string') return '';
+  const s = v.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return s.length > n ? s.slice(0, n) : s;
+}
+
+function needleLine(item) {
+  const title = clipText(item.title, 240);
+  const need = clipText(item.need, 400);
+  if (title && need) return title + ' · ' + need;
+  return title || need;
+}
 
 function makeWaitRow(id) {
   const av = makeAva();
@@ -1537,6 +1559,111 @@ function makeWaitRow(id) {
   return { row, av, name, btn, st, step };
 }
 
+function makeNeedleRow(key) {
+  const badge = h('span', { class: 'bhq-nbadge', text: 'decide-later' });
+  const name = h('span', { class: 'bhq-wname' });
+  const btn = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Open chat', hidden: true, title: 'Open this bot’s chat' });
+  const approve = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Approve', title: 'Copy “approve needle …” and open the chat' });
+  const skip = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Skip', title: 'Copy “skip needle …” and hide until the next needle post' });
+  const note = h('span', { class: 'bhq-nnote' });
+  const step = h('span');
+  const text = h('p', { class: 'bhq-wtext' }, step);
+  const row = h('div', { class: 'bhq-wrow is-needle', 'data-id': key },
+    h('div', { class: 'bhq-wmain' },
+      h('div', { class: 'bhq-wtop' }, badge, name),
+      text,
+      h('div', { class: 'bhq-nacts' }, btn, approve, skip, note)));
+  const ref = { row, name, btn, step, note, key, itemId: '', itemTitle: '', chat: null, copyT: 0 };
+  btn.addEventListener('click', () => {
+    const url = safeNeedleChatUrl(ref.chat);
+    if (url) openChat(ref.key, url);
+  });
+  approve.addEventListener('click', () => approveNeedle(ref));
+  skip.addEventListener('click', () => skipNeedle(ref));
+  return ref;
+}
+
+async function approveNeedle(r) {
+  const cmd = needleCommand('approve', { id: r.itemId, title: r.itemTitle });
+  if (cmd) {
+    const ok = await copyText(cmd);
+    setText(r.note, ok ? 'Copied — paste it in the chat' : 'Could not copy — send: ' + cmd);
+    r.row.classList.add('is-copied');
+    clearTimeout(r.copyT);
+    r.copyT = setTimeout(() => r.row.classList.remove('is-copied'), 4200);
+  }
+  const url = safeNeedleChatUrl(r.chat);
+  if (url) openChat(r.key, url);
+}
+
+async function skipNeedle(r) {
+  const cmd = needleCommand('skip', { id: r.itemId, title: r.itemTitle });
+  const ok = cmd ? await copyText(cmd) : false;
+  if (!ok) {
+    setText(r.note, cmd ? 'Could not copy — send: ' + cmd : 'No id to skip');
+    r.row.classList.add('is-copied');
+    return;
+  }
+  if (U.dock.needleSkip) U.dock.needleSkip.ids.add(r.key);
+  if (U.last.state) renderWaiting(U.last.state);
+}
+
+function renderNeedle(state) {
+  const d = U.dock;
+  const needle = state.needle && typeof state.needle === 'object' && !Array.isArray(state.needle) ? state.needle : null;
+  const sig = needleSig(needle);
+  if (!d.needleSkip || d.needleSkip.sig !== sig) d.needleSkip = { sig, ids: new Set() };
+  const hidden = d.needleSkip.ids;
+  const raw = needle && Array.isArray(needle.items) ? needle.items.slice(0, 5) : [];
+  const items = [];
+  const keys = [];
+  const used = new Set();
+  raw.forEach((item, i) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    let key = typeof item.id === 'string' && item.id.trim() ? item.id.trim().slice(0, 64) : `i${i}`;
+    if (used.has(key)) key = `${key}#${i}`;
+    if (hidden.has(key)) return;
+    used.add(key);
+    items.push(item);
+    keys.push(key);
+  });
+  const seen = new Set(keys);
+  for (const [key, r] of d.nrows) {
+    if (!seen.has(key)) { r.row.remove(); d.nrows.delete(key); }
+  }
+  const els = items.map((item, i) => {
+    const key = keys[i];
+    let r = d.nrows.get(key);
+    if (!r) { r = makeNeedleRow(key); d.nrows.set(key, r); }
+    r.key = key;
+    r.itemId = clipText(item.id, 80);
+    r.itemTitle = clipText(item.title, 240);
+    setAttr(r.row, 'data-id', key);
+    setText(r.name, clipText(item.bot, 80) || 'Bot');
+    const line = needleLine(item);
+    setText(r.step, line);
+    setAttr(r.step, 'title', line || null);
+    const chat = safeNeedleChatUrl(item.chat_url);
+    r.chat = chat;
+    setHidden(r.btn, !chat);
+    setAttr(r.btn, 'data-chat', chat);
+    return r.row;
+  });
+  reconcile(d.nlist, els, 0);
+
+  const footer = needle && needle.footer && typeof needle.footer === 'object' && !Array.isArray(needle.footer) ? needle.footer : null;
+  const footerUrl = footer ? safeNeedleFooterUrl(footer.url) : null;
+  if (footerUrl) {
+    setText(d.nlink, clipText(footer.label, 80) || 'Full list: bot dashboard');
+    setAttr(d.nlink, 'href', footerUrl);
+    setHidden(d.nfoot, false);
+  } else {
+    setAttr(d.nlink, 'href', null);
+    setHidden(d.nfoot, true);
+  }
+  return { count: items.length, footer: !!footerUrl };
+}
+
 function renderWaiting(state) {
   const d = U.dock;
   const bots = state.bots || {};
@@ -1546,9 +1673,11 @@ function renderWaiting(state) {
       || String(bots[a].name).localeCompare(String(bots[b].name)));
 
   const errors = ids.filter((id) => effStatus(bots[id]) === 'error').length;
-  setText(d.waiting.count, ids.length);
-  d.waiting.rows = ids.length;
-  setCls(d.waiting.root, 'has-rows', ids.length > 0);
+  const needle = renderNeedle(state);
+  const shown = ids.length + needle.count;
+  setText(d.waiting.count, shown);
+  d.waiting.rows = shown || (needle.footer ? 1 : 0);
+  setCls(d.waiting.root, 'has-rows', shown > 0 || needle.footer);
   setAttr(d.waiting.count, 'data-s', errors ? 'error' : ids.length ? 'waiting_user' : null);
 
   const seen = new Set(ids);
@@ -1569,7 +1698,7 @@ function renderWaiting(state) {
     return r.row;
   });
   reconcile(d.wlist, els, 0);
-  setHidden(d.wempty, ids.length > 0);
+  setHidden(d.wempty, shown > 0 || needle.footer);
 }
 
 /* Finished: the `done` lines of the last 24 hours, newest first, on a timeline. Hidden when the server sends none. */

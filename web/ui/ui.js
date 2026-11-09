@@ -11,6 +11,9 @@
  * State fields read: bots, floors, feed, usage, demo, now, summary, plus (bots-only mode, may be missing):
  *   bots[id].chat_url, state.finished [{ t, bot, name, step }], state.routines [{ bot, name, routine, schedule, next_run }],
  *   state.needle { items, footer, updated_at } (filtered decide-later strip; never a live waiting_user row).
+ *   state.requests, when present, is the ask queue. It is independent of bots[].status.
+ *   A newer working/idle/done status does not remove a request. Legacy rows set needs_explicit_ack.
+ *   Missing state.requests keeps the older "current waiting_user or error" list.
  *
  * Every DOM node is created once and then patched in place (text / attributes / classes only when the
  * value changed), so hover, focus and scroll positions survive the 1 Hz re-render.
@@ -492,16 +495,22 @@ function buildTopbar(root) {
   const usage = h('div', { class: 'bhq-usage bhq-surface', hidden: true }, usageLabel, meter, pct, h('span', { class: 'bhq-sep', 'aria-hidden': 'true' }), reset);
   const demo = h('span', { class: 'bhq-demo bhq-surface', text: 'DEMO', hidden: true, title: 'Demo data, not real bots' });
   // share an image of the office (web/share/, loaded on first use); audio/sound.js puts the speaker in front of it
+  const privacy = h('span', { class: 'bhq-private bhq-surface', text: 'Private', hidden: true, title: 'Signed-in office. The feed requires authentication.' });
+  const signout = h('button', { class: 'bhq-signout bhq-surface', type: 'button', text: 'Sign out', hidden: true });
+  signout.addEventListener('click', async () => {
+    try { await fetch('api/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* still end the edge session */ }
+    location.href = '/cdn-cgi/access/logout';
+  });
   const share = h('button', { class: 'bhq-share bhq-surface', type: 'button', 'aria-label': 'Share an image of your office', title: 'Share', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, svg(ICON.share));
   const loadShare = () => import('../share/share.js');
   share.addEventListener('pointerenter', loadShare, { once: true });
   share.addEventListener('click', () => {
     loadShare().then((m) => m.toggleShare({ anchor: share, state: U.last.state }), (err) => console.warn('[ui] share', err));
   });
-  const right = h('div', { class: 'bhq-right' }, share, demo, usage);
+  const right = h('div', { class: 'bhq-right' }, signout, privacy, share, demo, usage);
 
   root.append(brand, summary, right);
-  U.top = { root, clock, chips, summary, usage, usageLabel, meter, fill, pct, reset, demo };
+  U.top = { root, clock, chips, summary, usage, usageLabel, meter, fill, pct, reset, demo, privacy, signout };
 }
 
 /* ------------------------------------------------------------------ build: floors */
@@ -734,6 +743,9 @@ function setWaitBlur(on, save = true) {
   d.wlist.inert = d.blurred;
   d.nlist.inert = d.blurred;
   d.nfoot.inert = d.blurred;
+  if (d.elist) d.elist.inert = d.blurred;
+  if (d.wnote) d.wnote.inert = d.blurred;
+  if (d.wlegacy) d.wlegacy.inert = d.blurred;
   if (save) lsSet(LS_BLUR, d.blurred ? '1' : '0');
 }
 
@@ -743,12 +755,16 @@ function buildDock(floors, feed) {
   const finished = dockCard('finished', 'Finished');
   const routines = dockCard('routines', 'Routines');
 
+  const wnote = h('p', { class: 'bhq-wnote', hidden: true });
+  const wlegacy = h('p', { class: 'bhq-wlegacy', hidden: true });
   const wlist = h('div', { class: 'bhq-wlist' });
+  const ehead = h('p', { class: 'bhq-wnote', text: 'Live errors (current status, not a tracked request)', hidden: true });
+  const elist = h('div', { class: 'bhq-wlist bhq-elist' });
   const nlist = h('div', { class: 'bhq-nlist' });
   const nlink = h('a', { target: '_blank', rel: 'noopener noreferrer' });
   const nfoot = h('p', { class: 'bhq-nfoot', hidden: true }, nlink);
   const wempty = h('p', { class: 'bhq-note', text: 'Nothing is waiting on you.', hidden: true });
-  waiting.inner.append(wlist, nlist, nfoot, wempty);
+  waiting.inner.append(wnote, wlegacy, wlist, ehead, elist, nlist, nfoot, wempty);
 
   const tl = h('ol', { class: 'bhq-tl', role: 'list' });
   const fempty = h('p', { class: 'bhq-note', text: 'Nothing finished in the last 24 hours.', hidden: true });
@@ -762,8 +778,8 @@ function buildDock(floors, feed) {
   document.body.append(root);
 
   U.dock = {
-    root, waiting, finished, routines, wlist, nlist, nfoot, nlink, wempty, tl, fempty, rl, rempty,
-    lru: [], pinned: null, wrows: new Map(), nrows: new Map(), needleSkip: null, finSig: null, finRefs: [], routSig: null, routRefs: [], copied: new Map(), blurred: false,
+    root, waiting, finished, routines, wlist, nlist, nfoot, nlink, wempty, wnote, wlegacy, ehead, elist, tl, fempty, rl, rempty,
+    lru: [], pinned: null, wrows: new Map(), rrows: new Map(), erows: new Map(), nrows: new Map(), needleSkip: null, finSig: null, finRefs: [], routSig: null, routRefs: [], copied: new Map(), blurred: false, mode: null,
     floors, feed,
   };
 
@@ -1160,6 +1176,13 @@ function renderTopbar(state) {
   }
 
   setHidden(t.demo, !state.demo);
+  const isPrivate = state.office === 'private';
+  setHidden(t.privacy, !isPrivate);
+  setHidden(t.signout, !isPrivate);
+  if (isPrivate) {
+    const who = state.auth && state.auth.email ? state.auth.email : '';
+    setAttr(t.signout, 'title', who ? 'Sign out ' + who : 'Sign out');
+  }
 }
 
 /* ---- floors */
@@ -1693,41 +1716,170 @@ function renderNeedle(state) {
   return { count: items.length, footer: !!footerUrl };
 }
 
-function renderWaiting(state) {
-  const d = U.dock;
-  const bots = state.bots || {};
-  const ids = Object.keys(bots)
-    .filter((id) => { const s = effStatus(bots[id]); return s === 'waiting_user' || s === 'error'; })
+function dropMap(map) {
+  for (const r of map.values()) r.row.remove();
+  map.clear();
+}
+
+function statusIds(bots, pred) {
+  return Object.keys(bots)
+    .filter((id) => pred(effStatus(bots[id])))
     .sort((a, b) => (parseTs(bots[b].last_event) || 0) - (parseTs(bots[a].last_event) || 0)
       || String(bots[a].name).localeCompare(String(bots[b].name)));
+}
 
-  const errors = ids.filter((id) => effStatus(bots[id]) === 'error').length;
-  const needle = renderNeedle(state);
-  const shown = ids.length + needle.count;
-  setText(d.waiting.count, shown);
-  d.waiting.rows = shown || (needle.footer ? 1 : 0);
-  setCls(d.waiting.root, 'has-rows', shown > 0 || needle.footer);
-  setAttr(d.waiting.count, 'data-s', errors ? 'error' : ids.length ? 'waiting_user' : null);
+function paintStatusRow(map, id, bots) {
+  let r = map.get(id);
+  if (!r) { r = makeWaitRow(id); map.set(id, r); }
+  const bot = bots[id];
+  const s = effStatus(bot);
+  setAttr(r.row, 'data-s', s);
+  setAvatar(r.av, bot, s);
+  setText(r.name, bot.name || id);
+  setText(r.st, CHIP[s] || statusLabel(s));
+  setText(r.step, bot.step ? ' · ' + bot.step : '');
+  setHidden(r.btn, !bot.chat_url);
+  return r.row;
+}
 
-  const seen = new Set(ids);
-  for (const [id, r] of d.wrows) {
-    if (!seen.has(id)) { r.row.remove(); d.wrows.delete(id); }
-  }
-  const els = ids.map((id) => {
-    let r = d.wrows.get(id);
-    if (!r) { r = makeWaitRow(id); d.wrows.set(id, r); }
-    const bot = bots[id];
-    const s = effStatus(bot);
-    setAttr(r.row, 'data-s', s);
-    setAvatar(r.av, bot, s);
-    setText(r.name, bot.name || id);
-    setText(r.st, CHIP[s] || statusLabel(s));
-    setText(r.step, bot.step ? ' · ' + bot.step : '');
-    setHidden(r.btn, !bot.chat_url);
-    return r.row;
+function sourceLine(source) {
+  if (!source || typeof source !== 'object') return '';
+  const kind = clipText(source.kind, 40);
+  const name = clipText(source.name, 80);
+  if (kind && name) return kind.replace(/_/g, ' ') + ' · ' + name;
+  return name || kind.replace(/_/g, ' ');
+}
+
+function makeRequestRow(id) {
+  const av = makeAva();
+  const badge = h('span', { class: 'bhq-nbadge', text: 'Request' });
+  const name = h('button', { class: 'bhq-wname', type: 'button' });
+  const ack = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Acknowledge' });
+  const chat = h('button', { class: 'bhq-wbtn', type: 'button', text: 'Open chat', hidden: true });
+  const step = h('span');
+  const text = h('p', { class: 'bhq-wtext' }, step);
+  const sub = h('p', { class: 'bhq-wsub' });
+  const moved = h('p', { class: 'bhq-wsub' });
+  const note = h('p', { class: 'bhq-wsub' });
+  const row = h('div', { class: 'bhq-wrow is-request', 'data-id': id, 'data-s': 'waiting_user' },
+    av.root,
+    h('div', { class: 'bhq-wmain' },
+      h('div', { class: 'bhq-wtop' }, name, badge, chat, ack),
+      text, sub, moved, note));
+  const ref = { row, av, badge, name, ack, chat, step, sub, moved, note, id, ownerId: id };
+  const select = () => { if (U.h.onSelectBot) U.h.onSelectBot(ref.ownerId); };
+  name.addEventListener('click', select);
+  row.addEventListener('click', (e) => { if (!e.target.closest('button')) select(); });
+  chat.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = U.last.state && U.last.state.bots && U.last.state.bots[ref.ownerId];
+    if (b && b.chat_url) openChat(ref.ownerId, b.chat_url);
   });
-  reconcile(d.wlist, els, 0);
-  setHidden(d.wempty, shown > 0 || needle.footer);
+  ack.addEventListener('click', (e) => { e.stopPropagation(); acknowledgeRequest(ref); });
+  return ref;
+}
+
+async function acknowledgeRequest(r) {
+  const state = U.last && U.last.state;
+  const line = '{"type":"request","id":"' + r.id + '","action":"resolve"}';
+  if (!state || state.office !== 'private') {
+    const ok = await copyText(line);
+    setText(r.note, ok
+      ? 'Copied a resolve line. This page did not mark it resolved.'
+      : 'Not resolved. Post ' + line + ' to the authenticated ingest.');
+    return;
+  }
+  try {
+    const res = await fetch('api/requests/' + encodeURIComponent(r.id) + '/resolve', {
+      method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    if (res.status === 401) { location.href = 'login'; return; }
+    if (!res.ok) { setText(r.note, 'Still open. The office did not resolve this id.'); return; }
+    setText(r.note, 'Acknowledged. It leaves the list when the office confirms.');
+  } catch {
+    setText(r.note, 'Still open. The office could not be reached.');
+  }
+}
+
+function renderWaiting(state) {
+  const d = U.dock;
+  const tracked = Array.isArray(state.requests);
+  const mode = tracked ? 'tracked' : 'status';
+  if (d.mode !== mode) {
+    d.mode = mode;
+    dropMap(d.wrows);
+    dropMap(d.rrows);
+    dropMap(d.erows);
+  }
+  const bots = state.bots || {};
+  let rows = [];
+  let errors = 0;
+  if (!tracked) {
+    setHidden(d.wnote, true);
+    setHidden(d.wlegacy, true);
+    setHidden(d.ehead, true);
+    dropMap(d.erows);
+    reconcile(d.elist, [], 0);
+    rows = statusIds(bots, (s) => s === 'waiting_user' || s === 'error');
+    errors = rows.filter((id) => effStatus(bots[id]) === 'error').length;
+    const seen = new Set(rows);
+    for (const [id, r] of d.wrows) if (!seen.has(id)) { r.row.remove(); d.wrows.delete(id); }
+    reconcile(d.wlist, rows.map((id) => paintStatusRow(d.wrows, id, bots)), 0);
+  } else {
+    const meta = state.requests_meta && typeof state.requests_meta === 'object' ? state.requests_meta : {};
+    const open = state.requests.filter((req) => req && typeof req === 'object' && req.status !== 'resolved' && req.id);
+    setText(d.wnote, clipText(meta.note, 500) || 'Only posted requests are listed. Unread chat is not ingested.');
+    setHidden(d.wnote, state.office !== 'private' && open.length === 0);
+    const legacy = open.filter((req) => req.needs_explicit_ack).length;
+    setHidden(d.wlegacy, legacy === 0);
+    if (legacy) {
+      setText(d.wlegacy, legacy + (legacy === 1 ? ' legacy waiting line still needs' : ' legacy waiting lines still need')
+        + ' an explicit acknowledgement. A newer working, idle, or done status did not resolve them.');
+    }
+    const seen = new Set();
+    const els = open.map((req) => {
+      const id = clipText(req.id, 80);
+      seen.add(id);
+      let r = d.rrows.get(id);
+      if (!r) { r = makeRequestRow(id); d.rrows.set(id, r); }
+      r.id = id;
+      r.ownerId = req.owner_id || id;
+      const bot = bots[r.ownerId] || { id: r.ownerId, name: req.owner || r.ownerId, avatar: r.ownerId };
+      setAvatar(r.av, bot, 'waiting_user');
+      setText(r.badge, req.needs_explicit_ack ? 'Needs explicit ack' : 'Request');
+      setText(r.name, req.owner || bot.name || r.ownerId);
+      setText(r.step, req.detail || '');
+      const src = sourceLine(req.source);
+      setText(r.sub, src ? src + ' · ' + id : id);
+      const moved = req.activity_moved_on
+        ? 'Still open. Latest activity is ' + (req.activity_status || 'unknown')
+          + (req.activity_step ? ': ' + clipText(req.activity_step, 80) : '') + '. That did not resolve this request.'
+        : '';
+      setText(r.moved, moved);
+      setHidden(r.moved, !moved);
+      setText(r.ack, state.office === 'private' ? 'Acknowledge' : 'Copy resolve');
+      const chatUrl = bots[r.ownerId] && bots[r.ownerId].chat_url;
+      setHidden(r.chat, !chatUrl);
+      return r.row;
+    });
+    for (const [id, r] of d.rrows) if (!seen.has(id)) { r.row.remove(); d.rrows.delete(id); }
+    reconcile(d.wlist, els, 0);
+    const errIds = statusIds(bots, (s) => s === 'error');
+    errors = errIds.length;
+    const eseen = new Set(errIds);
+    for (const [id, r] of d.erows) if (!eseen.has(id)) { r.row.remove(); d.erows.delete(id); }
+    reconcile(d.elist, errIds.map((id) => paintStatusRow(d.erows, id, bots)), 0);
+    setHidden(d.ehead, errIds.length === 0);
+    rows = open;
+  }
+
+  const needle = renderNeedle(state);
+  const count = (tracked ? rows.length + errors : rows.length) + needle.count;
+  setText(d.waiting.count, count);
+  d.waiting.rows = count || (needle.footer ? 1 : 0);
+  setCls(d.waiting.root, 'has-rows', count > 0 || needle.footer);
+  setAttr(d.waiting.count, 'data-s', errors ? 'error' : (tracked ? rows.length : rows.length) ? 'waiting_user' : null);
+  setHidden(d.wempty, count > 0 || needle.footer);
 }
 
 /* Finished: the `done` lines of the last 24 hours, newest first, on a timeline. Hidden when the server sends none. */

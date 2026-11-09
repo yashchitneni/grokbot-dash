@@ -89,6 +89,10 @@ Each bot appends a line to `data/events.jsonl` (format: `docs/CONTRACT.md`, sect
 
 As a desktop wallpaper (Lively, Windows): `docs/WALLPAPER.md`; the Grok Bot wallpaper in one click: `lively/README.md`. Server details: `README-server.md`. Your own logo on the tower: `assets/brand/logo.png` (white on transparent).
 
+## Private office
+
+`office/README.md` is a separate Cloudflare Worker. It signs in both the page and the feed, and it keeps asks until an explicit resolve. The public ntfy topic is unchanged until you stop posting to it. Do not treat this Pages site as private while that topic is still in use.
+
 ## Credits
 
 - Earth imagery: NASA Earth Observatory (Blue Marble, Black Marble), public domain.

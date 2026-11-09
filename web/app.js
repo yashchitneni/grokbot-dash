@@ -132,9 +132,28 @@ async function poll() {
   setTimeout(poll, POLL_MS);
 }
 
-// ---------- the user's own bots: #<topic> ----------
+// ---------- private office, else the user's own bots: #<topic> ----------
 
-if (/^#[A-Za-z0-9_-]{6,64}(?:&|$)/.test(location.hash)) {
+let privateOffice = false;
+let signingIn = false;
+try {
+  const probe = await fetch('api/office', { cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(2000) });
+  if (probe.status === 401) signingIn = true;
+  else if (probe.ok) {
+    const info = await probe.json();
+    privateOffice = info && info.private === true;
+  }
+} catch { /* static preview or the public pages host: no private office on this origin */ }
+
+if (signingIn) {
+  location.href = 'login';
+} else if (privateOffice) {
+  // The fragment is not a credential for this host. Drop it so the page cannot follow a public feed.
+  if (location.hash) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch { /* keep going */ }
+  }
+  poll();
+} else if (/^#[A-Za-z0-9_-]{6,64}(?:&|$)/.test(location.hash)) {
   const { feedFromHash, connectFeed } = await import('./feed.js');
   const spec = feedFromHash(location.hash);
   if (spec) {

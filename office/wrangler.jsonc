@@ -14,5 +14,8 @@
   "durable_objects": {
     "bindings": [{ "name": "OFFICE", "class_name": "Office" }]
   },
+  // Served at yash.is/in-the-office/ (Worker routes on the yash.is zone, path-scoped Access app).
+  // office.yash.is redirects there once OFFICE_HOME is set; its /api/ingest keeps working for bots.
+  "vars": { "OFFICE_MOUNT": "/in-the-office", "OFFICE_LEGACY_HOSTS": "office.yash.is", "OFFICE_HOME": "https://yash.is/in-the-office/" },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Office"] }]
 }

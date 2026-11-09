@@ -84,6 +84,36 @@ function route(pathname) {
   return { path, api };
 }
 
+function redirect(location) {
+  return new Response(null, { status: 302, headers: { location, 'cache-control': 'no-store' } });
+}
+
+// The office can be mounted under a path on another site (OFFICE_MOUNT, e.g. /in-the-office on yash.is).
+// There the shell is served at <mount>/ with <base href="<mount>/office/">, so its relative links
+// (./app.js, ../assets, api/state) resolve inside the mount and never reach the host site's own pages.
+function officeMount(env) {
+  const m = typeof env.OFFICE_MOUNT === 'string' ? env.OFFICE_MOUNT.trim().replace(/\/+$/, '') : '';
+  return /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(m) ? m : '';
+}
+
+// Old hostnames (OFFICE_LEGACY_HOSTS, comma separated) send people to OFFICE_HOME. Machine ingest
+// keeps working on them so bots that still post there are not broken.
+function legacyHome(url, env) {
+  const home = typeof env.OFFICE_HOME === 'string' ? env.OFFICE_HOME.trim() : '';
+  if (!/^https:\/\/[^/]+\//.test(home)) return '';
+  const hosts = String(env.OFFICE_LEGACY_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  if (!hosts.includes(url.hostname.toLowerCase())) return '';
+  if (new URL(home).hostname === url.hostname) return '';
+  return home;
+}
+
+function withBase(html, base) {
+  const tag = `<base href="${base}">`;
+  const m = /<head(?:\s[^>]*)?>/i.exec(html);
+  if (!m) return tag + html;
+  return html.slice(0, m.index + m[0].length) + `\n  ${tag}` + html.slice(m.index + m[0].length);
+}
+
 function sameOrigin(request) {
   const origin = request.headers.get('origin');
   if (!origin) return true;
@@ -120,7 +150,20 @@ function stamp(rec) {
 
 export async function handle(request, env) {
   const url = new URL(request.url);
-  const { path, api } = route(url.pathname);
+  const mount = officeMount(env);
+  let pathname = url.pathname;
+  let mounted = false;
+  if (mount && (pathname === mount || pathname.startsWith(`${mount}/`))) {
+    mounted = true;
+    pathname = pathname.slice(mount.length);
+    if (pathname === '') return redirect(`${mount}/${url.search}`);
+  }
+  const { path, api } = route(pathname);
+
+  if (!mounted && api !== '/api/ingest') {
+    const home = legacyHome(url, env);
+    if (home) return redirect(home);
+  }
 
   if (api === '/api/health') return json({ ok: true, auth: 'required' });
 
@@ -214,18 +257,36 @@ export async function handle(request, env) {
   // The office shell lives at /office/ (its links are relative). Workers Assets canonicalises
   // /office/index.html to /office/ with a 307, and route() strips the trailing slash, so
   // rewriting to index.html sent /office/ back to itself forever (ERR_TOO_MANY_REDIRECTS).
-  if (url.pathname === '/' || url.pathname === '/office') {
-    return new Response(null, {
-      status: 302,
-      headers: { location: `/office/${url.search}`, 'cache-control': 'no-store' },
-    });
+  let assetRequest = request;
+  let base = '';
+  if (mounted) {
+    if (pathname === '/office' || pathname === '/office/') return redirect(`${mount}/${url.search}`);
+    const assetUrl = new URL(request.url);
+    assetUrl.pathname = pathname === '/' ? '/office/' : pathname;
+    if (pathname === '/') base = `${mount}/office/`;
+    assetRequest = new Request(assetUrl, request);
+  } else if (url.pathname === '/' || url.pathname === '/office') {
+    return redirect(`/office/${url.search}`);
   }
-  const asset = await env.ASSETS.fetch(request);
+  const asset = await env.ASSETS.fetch(assetRequest);
+  if (asset.status >= 300 && asset.status < 400 && mounted) {
+    // Assets canonicalise paths (index.html -> ./); keep the browser inside the mount.
+    const loc = asset.headers.get('location');
+    if (loc) {
+      const target = new URL(loc, assetRequest.url);
+      return redirect(target.pathname === '/office/' ? `${mount}/` : `${mount}${target.pathname}${target.search}`);
+    }
+  }
   const headers = new Headers(asset.headers);
   headers.set('cache-control', 'no-store');
   headers.set('x-content-type-options', 'nosniff');
   headers.set('referrer-policy', 'no-referrer');
-  headers.append('content-security-policy', "connect-src 'self'; frame-ancestors 'none'");
+  headers.append('content-security-policy', "connect-src 'self' blob:; frame-ancestors 'none'");
+  if (base && asset.ok) {
+    headers.delete('content-length');
+    headers.delete('etag');
+    return new Response(withBase(await asset.text(), base), { status: asset.status, headers });
+  }
   return new Response(asset.body, { status: asset.status, headers });
 }
 

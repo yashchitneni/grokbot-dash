@@ -211,9 +211,16 @@ export async function handle(request, env) {
   if (api.startsWith('/api/')) return json({ error: 'not_found' }, 404);
 
   if (!env.ASSETS || typeof env.ASSETS.fetch !== 'function') return json({ error: 'not_found' }, 404);
-  const assetUrl = new URL(request.url);
-  if (path === '/' || path === '/office') assetUrl.pathname = '/office/index.html';
-  const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
+  // The office shell lives at /office/ (its links are relative). Workers Assets canonicalises
+  // /office/index.html to /office/ with a 307, and route() strips the trailing slash, so
+  // rewriting to index.html sent /office/ back to itself forever (ERR_TOO_MANY_REDIRECTS).
+  if (url.pathname === '/' || url.pathname === '/office') {
+    return new Response(null, {
+      status: 302,
+      headers: { location: `/office/${url.search}`, 'cache-control': 'no-store' },
+    });
+  }
+  const asset = await env.ASSETS.fetch(request);
   const headers = new Headers(asset.headers);
   headers.set('cache-control', 'no-store');
   headers.set('x-content-type-options', 'nosniff');

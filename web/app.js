@@ -120,7 +120,7 @@ async function poll() {
   try {
     const since = state && !state.demoLocal ? `?since=${state.version}` : '';
     const res = await fetch(`api/state${since}`, { cache: 'no-store', credentials: 'same-origin' });   // relative: works under a sub-path too
-    if (res.status === 401) { location.href = 'login'; return; }
+    if (res.status === 401) { location.href = '/'; return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
@@ -146,7 +146,9 @@ try {
 } catch { /* static preview or the public pages host: no private office on this origin */ }
 
 if (signingIn) {
-  location.href = 'login';
+  // Private office is fronted by Cloudflare Access. Reloading / re-challenges Access
+  // instead of the harness /login page, which has caused redirect loops in browsers.
+  location.href = '/';
 } else if (privateOffice) {
   // The fragment is not a credential for this host. Drop it so the page cannot follow a public feed.
   if (location.hash) {

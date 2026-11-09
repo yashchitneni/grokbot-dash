@@ -452,7 +452,18 @@
 
 /* waiting on me: one tinted tile per bot (amber = waiting, red = error); the eye blurs them for the camera */
 .bhq-wlist { display: flex; flex-direction: column; gap: 6px; transition: filter .35s var(--bhq-ease), opacity .35s; }
-.bhq-dcard.is-blurred :is(.bhq-wlist, .bhq-nlist, .bhq-nfoot) { filter: blur(9px); opacity: .85; user-select: none; pointer-events: none; }
+.bhq-dcard.is-blurred :is(.bhq-wlist, .bhq-nlist, .bhq-nfoot, .bhq-wnote, .bhq-wlegacy) { filter: blur(9px); opacity: .85; user-select: none; pointer-events: none; }
+.bhq-wnote, .bhq-wlegacy, .bhq-wsub {
+  margin: 4px 6px; color: #C8C8CE; font: 800 12px/1.35 var(--bhq-round); overflow-wrap: anywhere;
+}
+.bhq-wlegacy { color: #FFD28E; }
+.bhq-wrow.is-request .bhq-wtop { justify-content: flex-start; gap: 6px; flex-wrap: wrap; }
+.bhq-wrow.is-request .bhq-wname { flex: 1 1 8em; min-width: 8em; text-align: left; }
+.bhq-elist:not(:empty) { margin-top: 6px; }
+.bhq-signout, .bhq-private {
+  height: 36px; padding: 0 12px; border-radius: 18px; display: inline-flex; align-items: center;
+  font: 900 12px/1 var(--bhq-round);
+}
 .bhq-wrow {
   --base: #51412B; display: flex; align-items: flex-start; gap: 11px; padding: 10px 12px 10px 10px; border-radius: 18px;
   background: linear-gradient(90deg, rgba(255, 178, 58, .3), rgba(255, 178, 58, .11));

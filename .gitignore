@@ -19,3 +19,7 @@ web/_mock/
 
 # Lively package built with the view key inside (lively/build.ps1)
 lively/dist/
+
+# private office asset bundle (built by office/assemble.mjs; no secrets)
+office/public/
+office/.wrangler/

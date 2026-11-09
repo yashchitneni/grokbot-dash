@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Request preview</title>
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./ui.css">
+  <style>
+    /* Fixture shot: skip the entrance blur so the captured frame is the settled office. */
+    .bhq-surface { animation: none !important; }
+  </style>
+  <script>
+    const matchMediaNative = window.matchMedia.bind(window);
+    window.matchMedia = (query) => {
+      if (String(query).includes('prefers-reduced-motion')) {
+        return { matches: true, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} };
+      }
+      return matchMediaNative(query);
+    };
+  </script>
+</head>
+<body>
+  <main id="scene" aria-label="Office"></main>
+  <header id="topbar"></header>
+  <nav id="floors" aria-label="Floors"></nav>
+  <aside id="panel" aria-label="Bot card and floor team"></aside>
+  <section id="feed" aria-label="Event feed"></section>
+  <script type="module" src="./requests-preview.mjs"></script>
+</body>
+</html>

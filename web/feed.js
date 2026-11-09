@@ -14,10 +14,14 @@
 //   {"chat":{"Bot A":"grokbot://app/v1/agent?id=…"}}                         each bot's chat, for «Open chat»
 //   {"routines":{"bot":"Bot A","items":[{"name":"…","schedule":"…","next_run":"ISO"}]}}   a bot's routines
 //   {"type":"needle","updated_at":"ISO","footer":{"label":"…","url":"https://…"},"items":[…]}  up to 5 decide-later asks
+//   {"type":"request","id":"…","bot":"…","action":"open|resolve","detail":"…","source":{"kind":"routine","name":"…"}}
 // On top of the server's state the office gets state.finished (done lines of the last 24 h, newest first),
 // state.routines (every bot's routines, soonest first), and state.needle (the latest needle strip).
-// A needle line never becomes a bot.
+// A needle line never becomes a bot. Request lines never become a bot either.
+// state.requests is replayed from these lines and is NOT the private office: a later working/idle/done
+// line does not resolve one. Unread chat is not ingested. See office/README.md.
 import { StateStore, botIdFor, safeChatUrl } from './lib/state.js';
+import { applyRequestMessage, decorateRequests, feedRequestsMeta } from './lib/requests.js';
 import { parseFeedHash, ntfyAuthUrl, DEFAULT_FEED_SERVER } from './lib/feed-url.js';
 
 const MAX_LINE = 4096, KEEP = 600, TICK_MS = 30e3, DAY_MS = 24 * 3600e3;
@@ -37,6 +41,7 @@ export async function connectFeed({ topic, server, auth }, onState) {
   const store = new StateStore({ tz, hasAvatar: (id) => HANDMADE.has(id) });   // others get a generated blob, no 404 probe
   const cfg = {};                                        // per bot name: { look, chat_url } -> the store's bots config
   const routines = new Map();                            // bot id -> { name, items }
+  const requests = new Map();                            // durable asks, independent of the latest status
   let latestNeedle = null;                               // last {type:"needle"} record; the next one replaces it
   let lines = [], saveTimer = 0, lastId = null;
   const seen = new Set();
@@ -139,6 +144,11 @@ export async function connectFeed({ topic, server, auth }, onState) {
       return true;
     }
     if (applyRoutineMessage(routines, rec)) return true;
+    if (rec.type === 'request') {
+      applyRequestMessage(requests, rec, t);
+      return true;
+    }
+    applyRequestMessage(requests, rec, t);
     store.apply({ ...rec, t }, { replay });
     return true;
   }
@@ -157,6 +167,9 @@ export async function connectFeed({ topic, server, auth }, onState) {
     s.routines = routineRows(routines);
     const needle = normalizeNeedle(latestNeedle);
     if (needle) s.needle = needle;
+    const open = decorateRequests([...requests.values()], s.bots);
+    s.requests = open;
+    s.requests_meta = feedRequestsMeta(open);
     return s;
   }
   function publish() { store.commit(); onState(extras(store.snapshot())); }

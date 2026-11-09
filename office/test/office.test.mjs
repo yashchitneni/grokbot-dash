@@ -265,3 +265,31 @@ test('login sets a session, logout clears it, and no credential is in the HTML',
   assert.equal(source.includes(INGEST), false);
   assert.equal(/gbw-[A-Za-z0-9]{22}/.test(source), false);
 });
+
+test('signed-in office shell does not redirect to itself', async () => {
+  const env = testEnv();
+  // Mirror Workers Assets html_handling "auto-trailing-slash".
+  env.ASSETS = {
+    async fetch(req) {
+      const { pathname } = new URL(req.url);
+      if (pathname === '/office/index.html') return new Response(null, { status: 307, headers: { location: '/office/' } });
+      if (pathname === '/office/') return new Response('<!doctype html><p>Office shell</p>', { headers: { 'content-type': 'text/html' } });
+      return new Response('not found', { status: 404 });
+    },
+  };
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = makeJwt({ aud: ['office-aud'], iss: 'https://team.example.cloudflareaccess.com', exp: now + 600, email: 'o@example.test' });
+  const headers = { cookie: `CF_Authorization=${jwt}`, accept: 'text/html' };
+  let url = 'https://office.example/';
+  let hops = 0;
+  let res;
+  for (; hops < 5; hops++) {
+    res = await handle(new Request(url, { headers }), env);
+    if (res.status < 300 || res.status >= 400) break;
+    url = new URL(res.headers.get('location'), url).href;
+  }
+  assert.equal(res.status, 200);
+  assert.ok(hops <= 1, `took ${hops} redirects`);
+  assert.equal(new URL(url).pathname, '/office/');
+});
+

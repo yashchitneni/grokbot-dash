@@ -293,3 +293,102 @@ test('signed-in office shell does not redirect to itself', async () => {
   assert.equal(new URL(url).pathname, '/office/');
 });
 
+
+function realisticAssets() {
+  return {
+    async fetch(req) {
+      const { pathname } = new URL(req.url);
+      if (pathname === '/office/index.html') return new Response(null, { status: 307, headers: { location: '/office/' } });
+      if (pathname === '/office/') return new Response('<!doctype html>\n<html><head>\n<meta charset="utf-8"><script src="./app.js"></script></head><body>Office shell</body></html>', { headers: { 'content-type': 'text/html' } });
+      if (pathname === '/office/app.js') return new Response('// app', { headers: { 'content-type': 'text/javascript' } });
+      if (pathname === '/assets/brand/logo-mark.png') return new Response('png', { headers: { 'content-type': 'image/png' } });
+      return new Response('not found', { status: 404 });
+    },
+  };
+}
+
+function accessCookie() {
+  const now = Math.floor(Date.now() / 1000);
+  return `CF_Authorization=${makeJwt({ aud: ['office-aud'], iss: 'https://team.example.cloudflareaccess.com', exp: now + 600, email: 'o@example.test' })}`;
+}
+
+function mountedEnv() {
+  const env = testEnv();
+  env.ASSETS = realisticAssets();
+  env.OFFICE_MOUNT = '/in-the-office';
+  env.OFFICE_LEGACY_HOSTS = 'office.example';
+  env.OFFICE_HOME = 'https://site.example/in-the-office/';
+  return env;
+}
+
+async function at(env, href, init = {}) {
+  return handle(new Request(href, init), env);
+}
+
+test('office mounted under a path on another site', async () => {
+  const env = mountedEnv();
+  const site = 'https://site.example';
+  const cookie = accessCookie();
+
+  const bare = await at(env, `${site}/in-the-office`);
+  assert.equal(bare.status, 302);
+  assert.equal(bare.headers.get('location'), '/in-the-office/');
+
+  assert.equal((await at(env, `${site}/in-the-office/`, { headers: { accept: 'text/html' } })).status, 401);
+  assert.equal((await at(env, `${site}/in-the-office/api/state`)).status, 401);
+  assert.equal((await at(env, `${site}/in-the-office/office/app.js`)).status, 401);
+
+  let href = `${site}/in-the-office`;
+  let res;
+  let hops = 0;
+  for (; hops < 5; hops++) {
+    res = await at(env, href, { headers: { cookie, accept: 'text/html' } });
+    if (res.status < 300 || res.status >= 400) break;
+    href = new URL(res.headers.get('location'), href).href;
+  }
+  assert.equal(res.status, 200);
+  assert.equal(hops, 1);
+  assert.equal(new URL(href).pathname, '/in-the-office/');
+  const html = await res.text();
+  assert.match(html, /<head>\n  <base href="\/in-the-office\/office\/">/);
+  // Relative links in the shell resolve inside the mount.
+  const pageBase = new URL('/in-the-office/office/', site);
+  assert.equal(new URL('./app.js', pageBase).pathname, '/in-the-office/office/app.js');
+  assert.equal(new URL('../assets/brand/logo-mark.png', pageBase).pathname, '/in-the-office/assets/brand/logo-mark.png');
+  assert.equal(new URL('api/state', pageBase).pathname, '/in-the-office/office/api/state');
+
+  assert.equal((await at(env, `${site}/in-the-office/office/app.js`, { headers: { cookie } })).status, 200);
+  assert.equal((await at(env, `${site}/in-the-office/assets/brand/logo-mark.png`, { headers: { cookie } })).status, 200);
+  assert.equal((await at(env, `${site}/in-the-office/office/api/state`, { headers: { cookie } })).status, 200);
+  const idx = await at(env, `${site}/in-the-office/office/index.html`, { headers: { cookie } });
+  assert.equal(idx.status, 302);
+  assert.equal(idx.headers.get('location'), '/in-the-office/');
+  const again = await at(env, `${site}/in-the-office/office/`, { headers: { cookie } });
+  assert.equal(again.headers.get('location'), '/in-the-office/');
+
+  const posted = await at(env, `${site}/in-the-office/api/ingest`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${INGEST}` },
+    body: JSON.stringify({ bot: 'Health Bot', status: 'working', step: 'mounted' }),
+  });
+  assert.equal(posted.status, 202);
+});
+
+test('legacy host redirects to the mounted office but keeps ingest', async () => {
+  const env = mountedEnv();
+  for (const p of ['/', '/office/', '/office/app.js', '/api/state']) {
+    const res = await at(env, `https://office.example${p}`, { headers: { cookie: accessCookie() } });
+    assert.equal(res.status, 302, p);
+    assert.equal(res.headers.get('location'), 'https://site.example/in-the-office/');
+  }
+  const posted = await at(env, 'https://office.example/api/ingest', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${INGEST}` },
+    body: JSON.stringify({ bot: 'Health Bot', status: 'working', step: 'legacy' }),
+  });
+  assert.equal(posted.status, 202);
+  // Without OFFICE_HOME the legacy host still serves the office as before.
+  env.OFFICE_HOME = '';
+  const res = await at(env, 'https://office.example/office/', { headers: { cookie: accessCookie() } });
+  assert.equal(res.status, 200);
+});

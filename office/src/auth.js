@@ -166,8 +166,16 @@ export async function readSession(token, secret, now = Date.now()) {
   return { kind: 'user', email: data.email.slice(0, 200), method: 'session', gen };
 }
 
+export function accessJwtFromRequest(request) {
+  const header = request.headers.get('cf-access-jwt-assertion');
+  if (header) return header;
+  // Access also stores the same JWT on the app host. Some Worker custom-domain
+  // paths only forward the cookie; treat it as proof the same way as the header.
+  return cookieValue(request.headers.get('cookie'), 'CF_Authorization');
+}
+
 export async function authenticateUser(request, env, now = Date.now()) {
-  const jwt = request.headers.get('cf-access-jwt-assertion');
+  const jwt = accessJwtFromRequest(request);
   if (jwt) {
     const jwks = await loadJwks(env);
     const domain = typeof env.ACCESS_TEAM_DOMAIN === 'string' ? env.ACCESS_TEAM_DOMAIN.trim() : '';

@@ -1793,7 +1793,7 @@ async function acknowledgeRequest(r) {
     const res = await fetch('api/requests/' + encodeURIComponent(r.id) + '/resolve', {
       method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: '{}',
     });
-    if (res.status === 401) { location.href = 'login'; return; }
+    if (res.status === 401) { location.href = '/'; return; }
     if (!res.ok) { setText(r.note, 'Still open. The office did not resolve this id.'); return; }
     setText(r.note, 'Acknowledged. It leaves the list when the office confirms.');
   } catch {
